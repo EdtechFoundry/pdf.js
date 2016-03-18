@@ -17,7 +17,7 @@
 
 if (!PDFJS.PDFViewer || !PDFJS.getDocument) {
   alert('Please build the library and components using\n' +
-        '  `node make generic components`');
+        '  `gulp generic components`');
 }
 
 // The workerSrc property shall be specified.
@@ -47,7 +47,7 @@ PDFJS.getDocument(DEFAULT_URL).then(function (pdfDocument) {
       defaultViewport: pdfPage.getViewport(SCALE),
       // We can enable text/annotations layers, if needed
       textLayerFactory: new PDFJS.DefaultTextLayerFactory(),
-      annotationsLayerFactory: new PDFJS.DefaultAnnotationsLayerFactory()
+      annotationLayerFactory: new PDFJS.DefaultAnnotationLayerFactory()
     });
     // Associates the actual page with the view, and drawing it
     pdfPageView.setPdfPage(pdfPage);

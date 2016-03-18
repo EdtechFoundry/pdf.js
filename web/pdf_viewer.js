@@ -16,7 +16,7 @@
            SCROLLBAR_PADDING, VERTICAL_PADDING, MAX_AUTO_SCALE, CSS_UNITS,
            DEFAULT_SCALE, scrollIntoView, getVisibleElements, RenderingStates,
            PDFJS, Promise, TextLayerBuilder, PDFRenderingQueue,
-           AnnotationsLayerBuilder, DEFAULT_SCALE_VALUE */
+           AnnotationLayerBuilder, DEFAULT_SCALE_VALUE */
 
 'use strict';
 
@@ -33,13 +33,15 @@ var DEFAULT_CACHE_SIZE = 10;
 //#include pdf_rendering_queue.js
 //#include pdf_page_view.js
 //#include text_layer_builder.js
-//#include annotations_layer_builder.js
+//#include annotation_layer_builder.js
 
 /**
  * @typedef {Object} PDFViewerOptions
  * @property {HTMLDivElement} container - The container for the viewer element.
  * @property {HTMLDivElement} viewer - (optional) The viewer element.
  * @property {IPDFLinkService} linkService - The navigation/linking service.
+ * @property {DownloadManager} downloadManager - (optional) The download
+ *   manager component.
  * @property {PDFRenderingQueue} renderingQueue - (optional) The rendering
  *   queue object.
  * @property {boolean} removePageBorders - (optional) Removes the border shadow
@@ -92,6 +94,7 @@ var PDFViewer = (function pdfViewer() {
     this.container = options.container;
     this.viewer = options.viewer || options.container.firstElementChild;
     this.linkService = options.linkService || new SimpleLinkService();
+    this.downloadManager = options.downloadManager || null;
     this.removePageBorders = options.removePageBorders || false;
 
     this.defaultRenderingQueue = !options.renderingQueue;
@@ -294,7 +297,7 @@ var PDFViewer = (function pdfViewer() {
             defaultViewport: viewport.clone(),
             renderingQueue: this.renderingQueue,
             textLayerFactory: textLayerFactory,
-            annotationsLayerFactory: this
+            annotationLayerFactory: this
           });
           bindOnAfterAndBeforeDraw(pageView);
           this._pages.push(pageView);
@@ -751,13 +754,14 @@ var PDFViewer = (function pdfViewer() {
     /**
      * @param {HTMLDivElement} pageDiv
      * @param {PDFPage} pdfPage
-     * @returns {AnnotationsLayerBuilder}
+     * @returns {AnnotationLayerBuilder}
      */
-    createAnnotationsLayerBuilder: function (pageDiv, pdfPage) {
-      return new AnnotationsLayerBuilder({
+    createAnnotationLayerBuilder: function (pageDiv, pdfPage) {
+      return new AnnotationLayerBuilder({
         pageDiv: pageDiv,
         pdfPage: pdfPage,
-        linkService: this.linkService
+        linkService: this.linkService,
+        downloadManager: this.downloadManager
       });
     },
 

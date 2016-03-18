@@ -12,11 +12,35 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-/* globals ColorSpace, PDFFunction, Util, error, warn, info, isArray, isStream,
-           assert, isPDFFunction, UnsupportedManager, UNSUPPORTED_FEATURES,
-           MissingDataException */
 
 'use strict';
+
+(function (root, factory) {
+  if (typeof define === 'function' && define.amd) {
+    define('pdfjs/core/pattern', ['exports', 'pdfjs/shared/util',
+      'pdfjs/core/primitives', 'pdfjs/core/function',
+      'pdfjs/core/colorspace'], factory);
+  } else if (typeof exports !== 'undefined') {
+    factory(exports, require('../shared/util.js'), require('./primitives.js'),
+      require('./function.js'), require('./colorspace.js'));
+  } else {
+    factory((root.pdfjsCorePattern = {}), root.pdfjsSharedUtil,
+      root.pdfjsCorePrimitives, root.pdfjsCoreFunction,
+      root.pdfjsCoreColorSpace);
+  }
+}(this, function (exports, sharedUtil, corePrimitives, coreFunction,
+                  coreColorSpace) {
+
+var UNSUPPORTED_FEATURES = sharedUtil.UNSUPPORTED_FEATURES;
+var MissingDataException = sharedUtil.MissingDataException;
+var Util = sharedUtil.Util;
+var assert = sharedUtil.assert;
+var error = sharedUtil.error;
+var info = sharedUtil.info;
+var warn = sharedUtil.warn;
+var isStream = corePrimitives.isStream;
+var PDFFunction = coreFunction.PDFFunction;
+var ColorSpace = coreColorSpace.ColorSpace;
 
 var ShadingType = {
   FUNCTION_BASED: 1,
@@ -43,7 +67,7 @@ var Pattern = (function PatternClosure() {
   };
 
   Pattern.parseShading = function Pattern_parseShading(shading, matrix, xref,
-                                                       res) {
+                                                       res, handler) {
 
     var dict = isStream(shading) ? shading.dict : shading;
     var type = dict.get('ShadingType');
@@ -66,7 +90,8 @@ var Pattern = (function PatternClosure() {
       if (ex instanceof MissingDataException) {
         throw ex;
       }
-      UnsupportedManager.notify(UNSUPPORTED_FEATURES.shadingPattern);
+      handler.send('UnsupportedFeature',
+                   {featureId: UNSUPPORTED_FEATURES.shadingPattern});
       warn(ex);
       return new Shadings.Dummy();
     }
@@ -77,10 +102,8 @@ var Pattern = (function PatternClosure() {
 var Shadings = {};
 
 // A small number to offset the first/last color stops so we can insert ones to
-// support extend.  Number.MIN_VALUE appears to be too small and breaks the
-// extend. 1e-7 works in FF but chrome seems to use an even smaller sized number
-// internally so we have to go bigger.
-Shadings.SMALL_NUMBER = 1e-2;
+// support extend. Number.MIN_VALUE is too small and breaks the extend.
+Shadings.SMALL_NUMBER = 1e-6;
 
 // Radial and axial shading have very similar implementations
 // If needed, the implementations can be broken into two classes
@@ -805,3 +828,7 @@ function getTilingPatternIR(operatorList, dict, args) {
     paintType, tilingType
   ];
 }
+
+exports.Pattern = Pattern;
+exports.getTilingPatternIR = getTilingPatternIR;
+}));

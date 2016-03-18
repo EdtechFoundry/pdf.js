@@ -12,16 +12,63 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-/* globals PDFJS, isArrayBuffer, error, combineUrl, createPromiseCapability,
-           StatTimer, globalScope, MessageHandler, info, FontLoader, Util, warn,
-           Promise, PasswordResponses, PasswordException, InvalidPDFException,
-           MissingPDFException, UnknownErrorException, FontFaceObject,
-           loadJpegStream, createScratchCanvas, CanvasGraphics, stringToBytes,
-           UnexpectedResponseException, deprecated, UnsupportedManager */
+/* globals pdfjsFilePath */
 
 'use strict';
 
+(function (root, factory) {
+  if (typeof define === 'function' && define.amd) {
+    define('pdfjs/display/api', ['exports', 'pdfjs/shared/util',
+      'pdfjs/display/font_loader', 'pdfjs/display/canvas',
+      'pdfjs/display/metadata', 'pdfjs/shared/global', 'require'], factory);
+  } else if (typeof exports !== 'undefined') {
+    factory(exports, require('../shared/util.js'), require('./font_loader.js'),
+      require('./canvas.js'), require('./metadata.js'),
+      require('../shared/global.js'));
+  } else {
+    factory((root.pdfjsDisplayAPI = {}), root.pdfjsSharedUtil,
+      root.pdfjsDisplayFontLoader, root.pdfjsDisplayCanvas,
+      root.pdfjsDisplayMetadata, root.pdfjsSharedGlobal);
+  }
+}(this, function (exports, sharedUtil, displayFontLoader, displayCanvas,
+                  displayMetadata, sharedGlobal, amdRequire) {
+
+var InvalidPDFException = sharedUtil.InvalidPDFException;
+var MessageHandler = sharedUtil.MessageHandler;
+var MissingPDFException = sharedUtil.MissingPDFException;
+var PasswordResponses = sharedUtil.PasswordResponses;
+var PasswordException = sharedUtil.PasswordException;
+var StatTimer = sharedUtil.StatTimer;
+var UnexpectedResponseException = sharedUtil.UnexpectedResponseException;
+var UnknownErrorException = sharedUtil.UnknownErrorException;
+var Util = sharedUtil.Util;
+var createPromiseCapability = sharedUtil.createPromiseCapability;
+var combineUrl = sharedUtil.combineUrl;
+var error = sharedUtil.error;
+var deprecated = sharedUtil.deprecated;
+var info = sharedUtil.info;
+var isArrayBuffer = sharedUtil.isArrayBuffer;
+var isSameOrigin = sharedUtil.isSameOrigin;
+var loadJpegStream = sharedUtil.loadJpegStream;
+var stringToBytes = sharedUtil.stringToBytes;
+var warn = sharedUtil.warn;
+var FontFaceObject = displayFontLoader.FontFaceObject;
+var FontLoader = displayFontLoader.FontLoader;
+var CanvasGraphics = displayCanvas.CanvasGraphics;
+var createScratchCanvas = displayCanvas.createScratchCanvas;
+var Metadata = displayMetadata.Metadata;
+var PDFJS = sharedGlobal.PDFJS;
+var globalScope = sharedGlobal.globalScope;
+
 var DEFAULT_RANGE_CHUNK_SIZE = 65536; // 2^16 = 65536
+
+//#if PRODUCTION && !SINGLE_FILE
+//#if GENERIC
+//#include ../src/frameworks.js
+//#else
+//var fakeWorkerFilesLoader = null;
+//#endif
+//#endif
 
 /**
  * The maximum allowed image size in total pixels e.g. width * height. Images
@@ -196,6 +243,14 @@ PDFJS.externalLinkTarget = (PDFJS.externalLinkTarget === undefined ?
                             PDFJS.LinkTarget.NONE : PDFJS.externalLinkTarget);
 
 /**
+ * Specifies the |rel| attribute for external links. Defaults to stripping
+ * the referrer.
+ * @var {string}
+ */
+PDFJS.externalLinkRel = (PDFJS.externalLinkRel === undefined ?
+                         'noreferrer' : PDFJS.externalLinkRel);
+
+/**
   * Determines if we can eval strings as JS. Primarily used to improve
   * performance for font rendering.
   * @var {boolean}
@@ -359,11 +414,11 @@ PDFJS.getDocument = function getDocument(src,
         throw new Error('Loading aborted');
       }
       var messageHandler = new MessageHandler(docId, workerId, worker.port);
-      messageHandler.send('Ready', null);
       var transport = new WorkerTransport(messageHandler, task, rangeTransport);
       task._transport = transport;
+      messageHandler.send('Ready', null);
     });
-  }, task._capability.reject);
+  }).catch(task._capability.reject);
 
   return task;
 };
@@ -447,6 +502,12 @@ var PDFDocumentLoadingTask = (function PDFDocumentLoadingTaskClosure() {
      * an {Object} with the properties: {number} loaded and {number} total.
      */
     this.onProgress = null;
+
+    /**
+     * Callback to when unsupported feature is used. The callback receives
+     * an {PDFJS.UNSUPPORTED_FEATURES} argument.
+     */
+    this.onUnsupportedFeature = null;
   }
 
   PDFDocumentLoadingTask.prototype =
@@ -631,6 +692,14 @@ var PDFDocumentProxy = (function PDFDocumentProxyClosure() {
       return this.transport.getDestination(id);
     },
     /**
+     * @return {Promise} A promise that is resolved with:
+     *   an Array containing the pageLabels that correspond to the pageIndexes,
+     *   or `null` when no pageLabels are present in the PDF file.
+     */
+    getPageLabels: function PDFDocumentProxy_getPageLabels() {
+      return this.transport.getPageLabels();
+    },
+    /**
      * @return {Promise} A promise that is resolved with a lookup table for
      * mapping named attachments to their content.
      */
@@ -652,8 +721,9 @@ var PDFDocumentProxy = (function PDFDocumentProxyClosure() {
      *   title: string,
      *   bold: boolean,
      *   italic: boolean,
-     *   color: rgb array,
+     *   color: rgb Uint8Array,
      *   dest: dest obj,
+     *   url: string,
      *   items: array of more items like this
      *  },
      *  ...
@@ -802,7 +872,7 @@ var PDFPageProxy = (function PDFPageProxyClosure() {
     this.objs = new PDFObjects();
     this.cleanupAfterRender = false;
     this.pendingCleanup = false;
-    this.intentStates = {};
+    this.intentStates = Object.create(null);
     this.destroyed = false;
   }
   PDFPageProxy.prototype = /** @lends PDFPageProxy.prototype */ {
@@ -877,7 +947,7 @@ var PDFPageProxy = (function PDFPageProxyClosure() {
       var renderingIntent = (params.intent === 'print' ? 'print' : 'display');
 
       if (!this.intentStates[renderingIntent]) {
-        this.intentStates[renderingIntent] = {};
+        this.intentStates[renderingIntent] = Object.create(null);
       }
       var intentState = this.intentStates[renderingIntent];
 
@@ -964,17 +1034,23 @@ var PDFPageProxy = (function PDFPageProxyClosure() {
       function operatorListChanged() {
         if (intentState.operatorList.lastChunk) {
           intentState.opListReadCapability.resolve(intentState.operatorList);
+
+          var i = intentState.renderTasks.indexOf(opListTask);
+          if (i >= 0) {
+            intentState.renderTasks.splice(i, 1);
+          }
         }
       }
 
       var renderingIntent = 'oplist';
       if (!this.intentStates[renderingIntent]) {
-        this.intentStates[renderingIntent] = {};
+        this.intentStates[renderingIntent] = Object.create(null);
       }
       var intentState = this.intentStates[renderingIntent];
+      var opListTask;
 
       if (!intentState.opListReadCapability) {
-        var opListTask = {};
+        opListTask = {};
         opListTask.operatorListChanged = operatorListChanged;
         intentState.receivingOperatorList = true;
         intentState.opListReadCapability = createPromiseCapability();
@@ -1017,6 +1093,10 @@ var PDFPageProxy = (function PDFPageProxyClosure() {
 
       var waitOn = [];
       Object.keys(this.intentStates).forEach(function(intent) {
+        if (intent === 'oplist') {
+          // Avoid errors below, since the renderTasks are just stubs.
+          return;
+        }
         var intentState = this.intentStates[intent];
         intentState.renderTasks.forEach(function(renderTask) {
           var renderCompleted = renderTask.capability.promise.
@@ -1120,6 +1200,18 @@ var PDFPageProxy = (function PDFPageProxyClosure() {
 var PDFWorker = (function PDFWorkerClosure() {
   var nextFakeWorkerId = 0;
 
+  function getWorkerSrc() {
+    if (PDFJS.workerSrc) {
+      return PDFJS.workerSrc;
+    }
+//#if PRODUCTION && !(MOZCENTRAL || FIREFOX)
+//  if (pdfjsFilePath) {
+//    return pdfjsFilePath.replace(/\.js$/i, '.worker.js');
+//  }
+//#endif
+    error('No PDFJS.workerSrc specified');
+  }
+
   // Loads worker code into main thread.
   function setupFakeWorkerGlobal() {
     if (!PDFJS.fakeWorkerFilesLoadedCapability) {
@@ -1128,18 +1220,38 @@ var PDFWorker = (function PDFWorkerClosure() {
       // other files and resolves the promise. In production only the
       // pdf.worker.js file is needed.
 //#if !PRODUCTION
-      Util.loadScript(PDFJS.workerSrc);
+      if (typeof amdRequire === 'function') {
+        amdRequire(['pdfjs/core/network', 'pdfjs/core/worker'], function () {
+          PDFJS.fakeWorkerFilesLoadedCapability.resolve();
+        });
+      } else if (typeof require === 'function') {
+        require('../core/worker.js');
+        PDFJS.fakeWorkerFilesLoadedCapability.resolve();
+      } else {
+        throw new Error('AMD or CommonJS must be used to load fake worker.');
+      }
 //#endif
 //#if PRODUCTION && SINGLE_FILE
 //    PDFJS.fakeWorkerFilesLoadedCapability.resolve();
 //#endif
 //#if PRODUCTION && !SINGLE_FILE
-//    Util.loadScript(PDFJS.workerSrc, function() {
+//    var loader = fakeWorkerFilesLoader || function (callback) {
+//      Util.loadScript(getWorkerSrc(), callback);
+//    };
+//    loader(function () {
 //      PDFJS.fakeWorkerFilesLoadedCapability.resolve();
 //    });
 //#endif
     }
     return PDFJS.fakeWorkerFilesLoadedCapability.promise;
+  }
+
+  function createCDNWrapper(url) {
+    // We will rely on blob URL's property to specify origin.
+    // We want this function to fail in case if createObjectURL or Blob do not
+    // exist or fail for some reason -- our Worker creation will fail anyway.
+    var wrapper = 'importScripts(\'' + url + '\');';
+    return URL.createObjectURL(new Blob([wrapper]));
   }
 
   function PDFWorker(name) {
@@ -1168,23 +1280,27 @@ var PDFWorker = (function PDFWorkerClosure() {
 
     _initialize: function PDFWorker_initialize() {
       // If worker support isn't disabled explicit and the browser has worker
-      // support, create a new web worker and test if it/the browser fullfills
+      // support, create a new web worker and test if it/the browser fulfills
       // all requirements to run parts of pdf.js in a web worker.
       // Right now, the requirement is, that an Uint8Array is still an
       // Uint8Array as it arrives on the worker. (Chrome added this with v.15.)
 //#if !SINGLE_FILE
       if (!globalScope.PDFJS.disableWorker && typeof Worker !== 'undefined') {
-        var workerSrc = PDFJS.workerSrc;
-        if (!workerSrc) {
-          error('No PDFJS.workerSrc specified');
-        }
+        var workerSrc = getWorkerSrc();
 
         try {
+//#if GENERIC
+//        // Wraps workerSrc path into blob URL, if the former does not belong
+//        // to the same origin.
+//        if (!isSameOrigin(window.location.href, workerSrc)) {
+//          workerSrc = createCDNWrapper(
+//            combineUrl(window.location.href, workerSrc));
+//        }
+//#endif
           // Some versions of FF can't create a worker on localhost, see:
           // https://bugzilla.mozilla.org/show_bug.cgi?id=683280
           var worker = new Worker(workerSrc);
           var messageHandler = new MessageHandler('main', 'worker', worker);
-
           messageHandler.on('test', function PDFWorker_test(data) {
             if (this.destroyed) {
               this._readyCapability.reject(new Error('Worker was destroyed'));
@@ -1214,20 +1330,41 @@ var PDFWorker = (function PDFWorkerClosure() {
           messageHandler.on('console_error', function (data) {
             console.error.apply(console, data);
           });
-          messageHandler.on('_unsupported_feature', function (data) {
-            UnsupportedManager.notify(data);
-          });
 
-          var testObj = new Uint8Array([PDFJS.postMessageTransfers ? 255 : 0]);
-          // Some versions of Opera throw a DATA_CLONE_ERR on serializing the
-          // typed array. Also, checking if we can use transfers.
-          try {
-            messageHandler.send('test', testObj, [testObj.buffer]);
-          } catch (ex) {
-            info('Cannot use postMessage transfers');
-            testObj[0] = 0;
-            messageHandler.send('test', testObj);
-          }
+          messageHandler.on('ready', function (data) {
+            if (this.destroyed) {
+              this._readyCapability.reject(new Error('Worker was destroyed'));
+              messageHandler.destroy();
+              worker.terminate();
+              return; // worker was destroyed
+            }
+            try {
+              sendTest();
+            } catch (e)  {
+              // We need fallback to a faked worker.
+              this._setupFakeWorker();
+            }
+          }.bind(this));
+
+          var sendTest = function () {
+            var testObj = new Uint8Array(
+              [PDFJS.postMessageTransfers ? 255 : 0]);
+            // Some versions of Opera throw a DATA_CLONE_ERR on serializing the
+            // typed array. Also, checking if we can use transfers.
+            try {
+              messageHandler.send('test', testObj, [testObj.buffer]);
+            } catch (ex) {
+              info('Cannot use postMessage transfers');
+              testObj[0] = 0;
+              messageHandler.send('test', testObj);
+            }
+          };
+
+          // It might take time for worker to initialize (especially when AMD
+          // loader is used). We will try to send test immediately, and then
+          // when 'ready' message will arrive. The worker shall process only
+          // first received 'test'.
+          sendTest();
           return;
         } catch (e) {
           info('The worker has been disabled.');
@@ -1240,8 +1377,10 @@ var PDFWorker = (function PDFWorkerClosure() {
     },
 
     _setupFakeWorker: function PDFWorker_setupFakeWorker() {
-      warn('Setting up fake worker.');
-      globalScope.PDFJS.disableWorker = true;
+      if (!globalScope.PDFJS.disableWorker) {
+        warn('Setting up fake worker.');
+        globalScope.PDFJS.disableWorker = true;
+      }
 
       setupFakeWorkerGlobal().then(function () {
         if (this.destroyed) {
@@ -1584,6 +1723,19 @@ var WorkerTransport = (function WorkerTransportClosure() {
         }
       }, this);
 
+      messageHandler.on('UnsupportedFeature',
+          function transportUnsupportedFeature(data) {
+        if (this.destroyed) {
+          return; // Ignore any pending requests if the worker was terminated.
+        }
+        var featureId = data.featureId;
+        var loadingTask = this.loadingTask;
+        if (loadingTask.onUnsupportedFeature) {
+          loadingTask.onUnsupportedFeature(featureId);
+        }
+        PDFJS.UnsupportedManager.notify(featureId);
+      }, this);
+
       messageHandler.on('JpegDecode', function(data) {
         if (this.destroyed) {
           return Promise.reject('Worker was terminated');
@@ -1678,6 +1830,10 @@ var WorkerTransport = (function WorkerTransportClosure() {
       return this.messageHandler.sendWithPromise('GetDestination', { id: id });
     },
 
+    getPageLabels: function WorkerTransport_getPageLabels() {
+      return this.messageHandler.sendWithPromise('GetPageLabels', null);
+    },
+
     getAttachments: function WorkerTransport_getAttachments() {
       return this.messageHandler.sendWithPromise('GetAttachments', null);
     },
@@ -1695,7 +1851,7 @@ var WorkerTransport = (function WorkerTransportClosure() {
         then(function transportMetadata(results) {
         return {
           info: results[0],
-          metadata: (results[1] ? new PDFJS.Metadata(results[1]) : null)
+          metadata: (results[1] ? new Metadata(results[1]) : null)
         };
       });
     },
@@ -1731,7 +1887,7 @@ var WorkerTransport = (function WorkerTransportClosure() {
  */
 var PDFObjects = (function PDFObjectsClosure() {
   function PDFObjects() {
-    this.objs = {};
+    this.objs = Object.create(null);
   }
 
   PDFObjects.prototype = {
@@ -1822,7 +1978,7 @@ var PDFObjects = (function PDFObjectsClosure() {
     },
 
     clear: function PDFObjects_clear() {
-      this.objs = {};
+      this.objs = Object.create(null);
     }
   };
   return PDFObjects;
@@ -2000,3 +2156,29 @@ var InternalRenderTask = (function InternalRenderTaskClosure() {
 
   return InternalRenderTask;
 })();
+
+/**
+ * (Deprecated) Global observer of unsupported feature usages. Use
+ * onUnsupportedFeature callback of the {PDFDocumentLoadingTask} instance.
+ */
+PDFJS.UnsupportedManager = (function UnsupportedManagerClosure() {
+  var listeners = [];
+  return {
+    listen: function (cb) {
+      deprecated('Global UnsupportedManager.listen is used: ' +
+                 ' use PDFDocumentLoadingTask.onUnsupportedFeature instead');
+      listeners.push(cb);
+    },
+    notify: function (featureId) {
+      for (var i = 0, ii = listeners.length; i < ii; i++) {
+        listeners[i](featureId);
+      }
+    }
+  };
+})();
+
+exports.getDocument = PDFJS.getDocument;
+exports.PDFDataRangeTransport = PDFDataRangeTransport;
+exports.PDFDocumentProxy = PDFDocumentProxy;
+exports.PDFPageProxy = PDFPageProxy;
+}));

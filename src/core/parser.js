@@ -12,13 +12,50 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-/* globals Ascii85Stream, AsciiHexStream, CCITTFaxStream, Cmd, Dict, error,
-           FlateStream, isArray, isCmd, isDict, isInt, isName, isNum, isRef,
-           isString, Jbig2Stream, JpegStream, JpxStream, LZWStream, Name,
-           NullStream, PredictorStream, Ref, RunLengthStream, warn, info,
-           StreamType, MissingDataException, assert */
 
 'use strict';
+
+(function (root, factory) {
+  if (typeof define === 'function' && define.amd) {
+    define('pdfjs/core/parser', ['exports', 'pdfjs/shared/util',
+      'pdfjs/core/primitives', 'pdfjs/core/stream'], factory);
+  } else if (typeof exports !== 'undefined') {
+    factory(exports, require('../shared/util.js'), require('./primitives.js'),
+      require('./stream.js'));
+  } else {
+    factory((root.pdfjsCoreParser = {}), root.pdfjsSharedUtil,
+      root.pdfjsCorePrimitives, root.pdfjsCoreStream);
+  }
+}(this, function (exports, sharedUtil, corePrimitives, coreStream) {
+
+var MissingDataException = sharedUtil.MissingDataException;
+var StreamType = sharedUtil.StreamType;
+var assert = sharedUtil.assert;
+var error = sharedUtil.error;
+var info = sharedUtil.info;
+var isArray = sharedUtil.isArray;
+var isInt = sharedUtil.isInt;
+var isNum = sharedUtil.isNum;
+var isString = sharedUtil.isString;
+var warn = sharedUtil.warn;
+var Cmd = corePrimitives.Cmd;
+var Dict = corePrimitives.Dict;
+var Name = corePrimitives.Name;
+var Ref = corePrimitives.Ref;
+var isCmd = corePrimitives.isCmd;
+var isDict = corePrimitives.isDict;
+var isName = corePrimitives.isName;
+var Ascii85Stream = coreStream.Ascii85Stream;
+var AsciiHexStream = coreStream.AsciiHexStream;
+var CCITTFaxStream = coreStream.CCITTFaxStream;
+var FlateStream = coreStream.FlateStream;
+var Jbig2Stream = coreStream.Jbig2Stream;
+var JpegStream = coreStream.JpegStream;
+var JpxStream = coreStream.JpxStream;
+var LZWStream = coreStream.LZWStream;
+var NullStream = coreStream.NullStream;
+var PredictorStream = coreStream.PredictorStream;
+var RunLengthStream = coreStream.RunLengthStream;
 
 var EOF = {};
 
@@ -33,7 +70,7 @@ var Parser = (function ParserClosure() {
     this.lexer = lexer;
     this.allowStreams = allowStreams;
     this.xref = xref;
-    this.imageCache = {};
+    this.imageCache = Object.create(null);
     this.refill();
   }
 
@@ -451,23 +488,22 @@ var Parser = (function ParserClosure() {
             break;
           }
           found = false;
-          for (i = 0, j = 0; i < scanLength; i++) {
-            var b = scanBytes[i];
-            if (b !== ENDSTREAM_SIGNATURE[j]) {
-              i -= j;
-              j = 0;
-            } else {
+          i = 0;
+          while (i < scanLength) {
+            j = 0;
+            while (j < ENDSTREAM_SIGNATURE_LENGTH &&
+                   scanBytes[i + j] === ENDSTREAM_SIGNATURE[j]) {
               j++;
-              if (j >= ENDSTREAM_SIGNATURE_LENGTH) {
-                i++;
-                found = true;
-                break;
-              }
             }
+            if (j >= ENDSTREAM_SIGNATURE_LENGTH) {
+              found = true;
+              break;
+            }
+            i++;
           }
           if (found) {
-            skipped += i - ENDSTREAM_SIGNATURE_LENGTH;
-            stream.pos += i - ENDSTREAM_SIGNATURE_LENGTH;
+            skipped += i;
+            stream.pos += i;
             break;
           }
           skipped += scanLength;
@@ -832,17 +868,32 @@ var Lexer = (function LexerClosure() {
       return strBuf.join('');
     },
     getName: function Lexer_getName() {
-      var ch;
+      var ch, previousCh;
       var strBuf = this.strBuf;
       strBuf.length = 0;
       while ((ch = this.nextChar()) >= 0 && !specialChars[ch]) {
         if (ch === 0x23) { // '#'
           ch = this.nextChar();
+          if (specialChars[ch]) {
+            warn('Lexer_getName: ' +
+                 'NUMBER SIGN (#) should be followed by a hexadecimal number.');
+            strBuf.push('#');
+            break;
+          }
           var x = toHexDigit(ch);
           if (x !== -1) {
-            var x2 = toHexDigit(this.nextChar());
+            previousCh = ch;
+            ch = this.nextChar();
+            var x2 = toHexDigit(ch);
             if (x2 === -1) {
-              error('Illegal digit in hex char in name: ' + x2);
+              warn('Lexer_getName: Illegal digit (' +
+                   String.fromCharCode(ch) +') in hexadecimal number.');
+              strBuf.push('#', String.fromCharCode(previousCh));
+              if (specialChars[ch]) {
+                break;
+              }
+              strBuf.push(String.fromCharCode(ch));
+              continue;
             }
             strBuf.push(String.fromCharCode((x << 4) | x2));
           } else {
@@ -1059,3 +1110,13 @@ var Linearization = {
     };
   }
 };
+
+exports.EOF = EOF;
+exports.Lexer = Lexer;
+exports.Linearization = Linearization;
+exports.Parser = Parser;
+exports.isEOF = isEOF;
+
+// TODO refactor to remove dependency on stream.js
+coreStream._setCoreParser(exports);
+}));

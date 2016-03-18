@@ -12,9 +12,24 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-/* globals EOF, error, Lexer */
 
 'use strict';
+
+(function (root, factory) {
+  if (typeof define === 'function' && define.amd) {
+    define('pdfjs/core/ps_parser', ['exports', 'pdfjs/shared/util',
+      'pdfjs/core/parser'], factory);
+  } else if (typeof exports !== 'undefined') {
+    factory(exports, require('../shared/util.js'), require('./parser.js'));
+  } else {
+    factory((root.pdfjsCorePsParser = {}), root.pdfjsSharedUtil,
+      root.pdfjsCoreParser);
+  }
+}(this, function (exports, sharedUtil, coreParser) {
+
+var error = sharedUtil.error;
+var EOF = coreParser.EOF;
+var Lexer = coreParser.Lexer;
 
 var PostScriptParser = (function PostScriptParserClosure() {
   function PostScriptParser(lexer) {
@@ -111,7 +126,7 @@ var PostScriptToken = (function PostScriptTokenClosure() {
     this.value = value;
   }
 
-  var opCache = {};
+  var opCache = Object.create(null);
 
   PostScriptToken.getOperator = function PostScriptToken_getOperator(op) {
     var opValue = opCache[op];
@@ -218,3 +233,7 @@ var PostScriptLexer = (function PostScriptLexerClosure() {
   };
   return PostScriptLexer;
 })();
+
+exports.PostScriptLexer = PostScriptLexer;
+exports.PostScriptParser = PostScriptParser;
+}));
