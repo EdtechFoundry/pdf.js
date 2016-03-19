@@ -28,8 +28,8 @@ factory((root.pdfjsDistBuildPdfWorker = {}));
   // Use strict in our context only - users might not want it
   'use strict';
 
-var pdfjsVersion = '1.4.142';
-var pdfjsBuild = '69e623c';
+var pdfjsVersion = '1.4.147';
+var pdfjsBuild = '8f14b80';
 
   var pdfjsFilePath =
     typeof document !== 'undefined' && document.currentScript ?
@@ -42006,6 +42006,10 @@ var WorkerMessageHandler = PDFJS.WorkerMessageHandler = {
     var docId = docParams.docId;
     var workerHandlerName = docParams.docId + '_worker';
     var handler = new MessageHandler(workerHandlerName, docId, port);
+
+    // Ensure that postMessage transfers are correctly enabled/disabled,
+    // to prevent "DataCloneError" in older versions of IE (see issue 6957).
+    handler.postMessageTransfers = docParams.postMessageTransfers;
 
     function ensureNotTerminated() {
       if (terminated) {

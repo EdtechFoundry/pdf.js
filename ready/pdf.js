@@ -28,8 +28,8 @@ factory((root.pdfjsDistBuildPdf = {}));
   // Use strict in our context only - users might not want it
   'use strict';
 
-var pdfjsVersion = '1.4.142';
-var pdfjsBuild = '69e623c';
+var pdfjsVersion = '1.4.147';
+var pdfjsBuild = '8f14b80';
 
   var pdfjsFilePath =
     typeof document !== 'undefined' && document.currentScript ?
@@ -8921,7 +8921,8 @@ function _fetchDocument(worker, source, pdfDataRangeTransport, docId) {
     cMapPacked: PDFJS.cMapPacked,
     disableFontFace: PDFJS.disableFontFace,
     disableCreateObjectURL: PDFJS.disableCreateObjectURL,
-    verbosity: PDFJS.verbosity
+    verbosity: PDFJS.verbosity,
+    postMessageTransfers: PDFJS.postMessageTransfers,
   }).then(function (workerId) {
     if (worker.destroyed) {
       throw new Error('Worker was destroyed');
